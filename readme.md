@@ -149,3 +149,14 @@ project-root/
 * Consistency between training and inference pipelines is critical
 
 ---
+## ⚠️ Testing
+# Build from the backend folder
+Note this is just a POC , nothing is final we might not even use docker .
+Get docker on your system then :
+```bash
+cd backend
+docker build -t rent-backend .
+```
+then run it using :
+```bash
+docker run -p 8000:8000 rent-backend

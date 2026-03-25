@@ -16,3 +16,4 @@ def predict(data: PredictionRequest):
         "predicted_price": 85000  # fake MVP response
     }
 # remember smarty pants run using :"uvicorn backend.app:app --reload" ... I hate windows -_-
+#http://127.0.0.1:8000/docs
