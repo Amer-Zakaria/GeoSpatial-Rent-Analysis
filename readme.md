@@ -138,6 +138,7 @@ project-root/
 * Advanced feature engineering (geospatial features)
 * Model optimization
 * Deployment (Vercel + Render)
+* usage of docker (Important if we have time)
 
 ---
 
