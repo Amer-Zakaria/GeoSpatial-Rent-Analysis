@@ -3,10 +3,11 @@ import folium
 from folium.plugins import MarkerCluster
 import json
 from branca.element import MacroElement
+from branca.colormap import LinearColormap
 from jinja2 import Template
 
 # 1. Load property data
-df = pd.read_csv("uae_properties.csv")
+df = pd.read_csv("dubai_properties.csv")
 
 # 2. Filter for Dubai only
 df = df[df["City"] == "Dubai"]
@@ -23,23 +24,94 @@ dubai_map = folium.Map(
 )
 
 # 5. Load GeoJSON boundaries
-with open("dubai.geojson", "r", encoding="utf-8") as f:
+with open("communities_with_rent.geojson", "r", encoding="utf-8") as f:
     dubai_geojson = json.load(f)
 
 with open("dubai-boundary.geojson", "r", encoding="utf-8") as f:
     dubai_wide_geojson = json.load(f)
 
-# 6. Add GeoJSON boundaries with gray lines and minimal styling
+# 6. Create Color Scale for Communities based on Avg Rent per sqft
+rent_values = [
+    feature["properties"]["Avg_Rent_per_sqft"]
+    for feature in dubai_geojson["features"]
+    if feature["properties"].get("Avg_Rent_per_sqft") is not None
+]
+
+if rent_values:
+    min_rent, max_rent = min(rent_values), max(rent_values)
+    colormap = LinearColormap(
+        colors=[
+            "#ffffb2",
+            "#fecc5c",
+            "#fd8d3c",
+            "#f03b20",
+            "#bd0026",
+        ],  # Yellow to Red (YlOrRd)
+        vmin=min_rent,
+        vmax=max_rent,
+        caption="Avg Rent per sqft (AED)",
+    )
+    # Style the legend to be readable on dark mode (white background)
+    colormap.add_to(dubai_map)
+
+    class LegendStyle(MacroElement):
+        def __init__(self):
+            super(LegendStyle, self).__init__()
+            self._template = Template(
+                """
+                {% macro header(this, kwargs) %}
+                <style>
+                    .legend {
+                        background-color: rgba(255, 255, 255, 0.8) !important;
+                        padding: 10px !important;
+                        border-radius: 5px !important;
+                        color: black !important;
+                    }
+                </style>
+                {% endmacro %}
+                """
+            )
+
+    dubai_map.add_child(LegendStyle())
+else:
+    colormap = None
+
+
+# 7. Add GeoJSON boundaries with dynamic rent-based coloring
+# Pre-format rent data for tooltip display (AED, no decimal)
+for feature in dubai_geojson["features"]:
+    rent = feature["properties"].get("Avg_Rent_per_sqft")
+    if rent is not None:
+        feature["properties"]["Avg_Rent_Tooltip"] = f"{int(round(rent))} AED"
+    else:
+        feature["properties"]["Avg_Rent_Tooltip"] = "No Data"
+
+
+def community_style(feature):
+    rent = feature["properties"].get("Avg_Rent_per_sqft")
+    if rent is not None and colormap:
+        return {
+            "fillColor": colormap(rent),
+            "color": "#444444",  # Gray boundaries
+            "weight": 0.8,
+            "fillOpacity": 0.6,
+        }
+    return {
+        "fillColor": "transparent",
+        "color": "#444444",
+        "weight": 0.8,
+        "fillOpacity": 0,
+    }
+
+
 community_layer = folium.GeoJson(
     dubai_geojson,
     name="Dubai Communities",
-    style_function=lambda x: {
-        "fillColor": "transparent",
-        "color": "#444444",  # Gray boundaries
-        "weight": 0.8,
-        "fillOpacity": 0,
-    },
-    tooltip=folium.GeoJsonTooltip(fields=["CNAME_E"], aliases=["Community:"]),
+    style_function=community_style,
+    tooltip=folium.GeoJsonTooltip(
+        fields=["CNAME_E", "Properties_Count", "Avg_Rent_Tooltip"],
+        aliases=["Community:", "Number of Properties:", "Avg Rent per sqft:"],
+    ),
 ).add_to(dubai_map)
 
 # Add Dubai-wide boundary (notably thicker)
@@ -105,23 +177,23 @@ class DynamicStyling(MacroElement):
 
 dubai_map.add_child(DynamicStyling(community_layer, dubai_wide_layer))
 
-# 8. Add Marker Clusters for properties
-marker_cluster = MarkerCluster(name="Properties").add_to(dubai_map)
+# 9. Add Marker Clusters for properties
+# marker_cluster = MarkerCluster(name="Properties").add_to(dubai_map)
 
-for idx, row in df.iterrows():
-    popup_text = f"""
-    <b>Address:</b> {row['Address']}<br>
-    <b>Rent:</b> {row['Rent']} AED<br>
-    <b>Beds:</b> {row['Beds']}<br>
-    <b>Location:</b> {row['Location']}
-    """
-    folium.Marker(
-        location=[row["Latitude"], row["Longitude"]],
-        popup=folium.Popup(popup_text, max_width=300),
-    ).add_to(marker_cluster)
+# for idx, row in df.iterrows():
+#     popup_text = f"""
+#     <b>Address:</b> {row['Address']}<br>
+#     <b>Rent:</b> {row['Rent']} AED<br>
+#     <b>Beds:</b> {row['Beds']}<br>
+#     <b>Location:</b> {row['Location']}
+#     """
+#     folium.Marker(
+#         location=[row["Latitude"], row["Longitude"]],
+#         popup=folium.Popup(popup_text, max_width=300),
+#     ).add_to(marker_cluster)
 
 
-# 9. Add Click Handler
+# 10. Add Click Handler
 class ClickHandler(MacroElement):
     _template = Template(
         """
@@ -174,6 +246,6 @@ class ClickHandler(MacroElement):
 
 dubai_map.add_child(ClickHandler())
 
-# 10. Save map
+# 11. Save map
 dubai_map.save("dubai_interactive_map.html")
 print("Map has been generated as 'dubai_interactive_map.html'")
