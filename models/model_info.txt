@@ -1,0 +1,33 @@
+DUBAI RENTAL PRICE DENSITY MODEL
+============================================================
+
+Model: GradientBoosting
+Feature Set: Interaction
+Target: Rent_per_sqft
+Target Transformation: raw
+
+Test R²: 0.591983
+Test RMSE: 42.482650
+Test MAE: 25.862364
+Test Median AE: 16.586147
+
+Features:
+1. Location_score
+2. Distance_to_center
+3. Beds
+4. Furnishing
+5. Type
+6. Geo_cluster
+7. Latitude
+8. Longitude
+9. LocationScore_Beds
+10. Distance_Beds
+11. LocationScore_Furnishing
+12. Distance_Type
+
+Best Parameters:
+learning_rate: 0.1128974699510081
+max_depth: 6
+min_samples_leaf: 5
+n_estimators: 80
+subsample: 0.9864595841989582
