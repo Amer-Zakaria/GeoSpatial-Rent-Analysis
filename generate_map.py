@@ -1,141 +1,57 @@
+import json
 import pandas as pd
 import folium
-from folium.plugins import MarkerCluster
-import json
 from branca.element import MacroElement
 from branca.colormap import LinearColormap
 from jinja2 import Template
 
-# 1. Load property data
-df = pd.read_csv("dubai_properties.csv")
 
-# 2. Filter for Dubai only
-df = df[df["City"] == "Dubai"]
+def load_data(
+    csv_path="dubai_properties.csv",
+    communities_geojson_path="communities_with_rent.geojson",
+    boundary_geojson_path="dubai-boundary.geojson",
+):
+    try:
+        df = pd.read_csv(csv_path)
+        df = df[df["City"] == "Dubai"]
+        df = df.dropna(subset=["Latitude", "Longitude"])
+    except FileNotFoundError:
+        # Property markers are not currently rendered on the map, so this
+        # is non-fatal — an empty frame keeps the app usable without it.
+        df = pd.DataFrame()
 
-# 3. Clean coordinate data
-df = df.dropna(subset=["Latitude", "Longitude"])
+    with open(communities_geojson_path, "r", encoding="utf-8") as f:
+        dubai_geojson = json.load(f)
 
-# 4. Initialize Folium map centered on Dubai (Dark Mode)
-dubai_map = folium.Map(
-    location=[25.011921, 55.349367],
-    zoom_start=10,
-    tiles="CartoDB dark_matter",
-    control_scale=True,
-)
+    with open(boundary_geojson_path, "r", encoding="utf-8") as f:
+        dubai_wide_geojson = json.load(f)
 
-# 5. Load GeoJSON boundaries
-with open("communities_with_rent.geojson", "r", encoding="utf-8") as f:
-    dubai_geojson = json.load(f)
-
-with open("dubai-boundary.geojson", "r", encoding="utf-8") as f:
-    dubai_wide_geojson = json.load(f)
-
-# 6. Create Color Scale for Communities based on Avg Rent per sqft
-rent_values = [
-    feature["properties"]["Avg_Rent_per_sqft"]
-    for feature in dubai_geojson["features"]
-    if feature["properties"].get("Avg_Rent_per_sqft") is not None
-]
-
-if rent_values:
-    min_rent, max_rent = min(rent_values), max(rent_values)
-    colormap = LinearColormap(
-        colors=[
-            "#ffffb2",
-            "#fecc5c",
-            "#fd8d3c",
-            "#f03b20",
-            "#bd0026",
-        ],  # Yellow to Red (YlOrRd)
-        vmin=min_rent,
-        vmax=max_rent,
-        caption="Avg Rent per sqft (AED)",
-    )
-    # Style the legend to be readable on dark mode (white background)
-    colormap.add_to(dubai_map)
-
-    class LegendStyle(MacroElement):
-        def __init__(self):
-            super(LegendStyle, self).__init__()
-            self._template = Template(
-                """
-                {% macro header(this, kwargs) %}
-                <style>
-                    .legend {
-                        background-color: rgba(255, 255, 255, 0.8) !important;
-                        padding: 10px !important;
-                        border-radius: 5px !important;
-                        color: black !important;
-                    }
-                </style>
-                {% endmacro %}
-                """
-            )
-
-    dubai_map.add_child(LegendStyle())
-else:
-    colormap = None
+    return df, dubai_geojson, dubai_wide_geojson
 
 
-# 7. Add GeoJSON boundaries with dynamic rent-based coloring
-# Pre-format rent data for tooltip display (AED, no decimal)
-for feature in dubai_geojson["features"]:
-    rent = feature["properties"].get("Avg_Rent_per_sqft")
-    if rent is not None:
-        feature["properties"]["Avg_Rent_Tooltip"] = f"{int(round(rent))} AED"
-    else:
-        feature["properties"]["Avg_Rent_Tooltip"] = "No Data"
+class LegendStyle(MacroElement):
+    def __init__(self):
+        super().__init__()
+        self._template = Template("""
+            {% macro header(this, kwargs) %}
+            <style>
+                .legend {
+                    background-color: rgba(255, 255, 255, 0.8) !important;
+                    padding: 10px !important;
+                    border-radius: 5px !important;
+                    color: black !important;
+                }
+            </style>
+            {% endmacro %}
+            """)
 
 
-def community_style(feature):
-    rent = feature["properties"].get("Avg_Rent_per_sqft")
-    if rent is not None and colormap:
-        return {
-            "fillColor": colormap(rent),
-            "color": "#444444",  # Gray boundaries
-            "weight": 0.8,
-            "fillOpacity": 0.6,
-        }
-    return {
-        "fillColor": "transparent",
-        "color": "#444444",
-        "weight": 0.8,
-        "fillOpacity": 0,
-    }
-
-
-community_layer = folium.GeoJson(
-    dubai_geojson,
-    name="Dubai Communities",
-    style_function=community_style,
-    tooltip=folium.GeoJsonTooltip(
-        fields=["CNAME_E", "Properties_Count", "Avg_Rent_Tooltip"],
-        aliases=["Community:", "Number of Properties:", "Avg Rent per sqft:"],
-    ),
-).add_to(dubai_map)
-
-# Add Dubai-wide boundary (notably thicker)
-dubai_wide_layer = folium.GeoJson(
-    dubai_wide_geojson,
-    name="Dubai Boundary",
-    style_function=lambda x: {
-        "fillColor": "transparent",
-        "color": "#666666",  # Slightly lighter gray for the main boundary
-        "weight": 2.5,
-        "fillOpacity": 0,
-        "interactive": False,  # Make it non-interactive so it doesn't block tooltips
-    },
-).add_to(dubai_map)
-
-
-# 7. Add Zoom-dependent boundary thickness and remove focus outline
 class DynamicStyling(MacroElement):
     def __init__(self, community_layer, city_layer):
-        super(DynamicStyling, self).__init__()
+        super().__init__()
         self.community_layer = community_layer
         self.city_layer = city_layer
-        self._template = Template(
-            """
+        self._template = Template("""
             {% macro script(this, kwargs) %}
                 var community_layer = {{this.community_layer.get_name()}};
                 var city_layer = {{this.city_layer.get_name()}};
@@ -143,109 +59,237 @@ class DynamicStyling(MacroElement):
 
                 function updateStyle() {
                     var zoom = map.getZoom();
-                    
-                    // Community boundaries dynamic weight
+
                     var commWeight = 0.5 + (zoom - 10) * 0.5;
                     if (commWeight < 0.5) commWeight = 0.5;
                     if (commWeight > 4) commWeight = 4;
-                    
-                    community_layer.setStyle({
-                        weight: commWeight
-                    });
 
-                    // City boundary dynamic weight (notably thicker)
+                    community_layer.setStyle({ weight: commWeight });
+
                     var cityWeight = 2.0 + (zoom - 10) * 1.0;
                     if (cityWeight < 2.0) cityWeight = 2.0;
                     if (cityWeight > 8) cityWeight = 8;
 
-                    city_layer.setStyle({
-                        weight: cityWeight
-                    });
+                    city_layer.setStyle({ weight: cityWeight });
                 }
 
-                updateStyle(); // Initial call
-                map.on('zoomend', updateStyle); // Update on zoom changes
+                updateStyle();
+                map.on('zoomend', updateStyle);
 
-                // Remove the focus rectangle/outline on click/drag
                 var style = document.createElement('style');
                 style.innerHTML = '.leaflet-interactive { outline: none !important; }';
                 document.getElementsByTagName('head')[0].appendChild(style);
             {% endmacro %}
-            """
-        )
+            """)
 
 
-dubai_map.add_child(DynamicStyling(community_layer, dubai_wide_layer))
+class PredictHandler(MacroElement):
+    """
+    On map click: drops a marker, opens a popup with a small form
+    (Beds / Furnishing / Type), and on submit POSTs to /predict and
+    renders the prediction back into the popup.
+    """
 
-# 9. Add Marker Clusters for properties
-# marker_cluster = MarkerCluster(name="Properties").add_to(dubai_map)
+    _template = Template(r"""
+        {% macro script(this, kwargs) %}
+        (function() {
+            var map = {{this._parent.get_name()}};
+            var activeMarker = null;
 
-# for idx, row in df.iterrows():
-#     popup_text = f"""
-#     <b>Address:</b> {row['Address']}<br>
-#     <b>Rent:</b> {row['Rent']} AED<br>
-#     <b>Beds:</b> {row['Beds']}<br>
-#     <b>Location:</b> {row['Location']}
-#     """
-#     folium.Marker(
-#         location=[row["Latitude"], row["Longitude"]],
-#         popup=folium.Popup(popup_text, max_width=300),
-#     ).add_to(marker_cluster)
-
-
-# 10. Add Click Handler
-class ClickHandler(MacroElement):
-    _template = Template(
-        """
-            {% macro script(this, kwargs) %}
-            function decimalToDMS(decimal) {
-                var abs_dec = Math.abs(decimal);
-                var degrees = Math.floor(abs_dec);
-                var minutes = Math.floor((abs_dec - degrees) * 60);
-                var seconds = ((abs_dec - degrees - minutes / 60) * 3600).toFixed(2);
-                return { deg: degrees, min: minutes, sec: seconds };
+            function popupHtml(lat, lng) {
+                return (
+                    '<div class="predict-popup" data-lat="' + lat + '" data-lng="' + lng + '">' +
+                        '<div class="pp-coords">' + lat.toFixed(5) + ', ' + lng.toFixed(5) + '</div>' +
+                        '<label>Beds</label>' +
+                        '<input class="pp-beds" type="number" min="0" step="1" value="2" />' +
+                        '<label>Furnishing</label>' +
+                        '<select class="pp-furnishing">' +
+                            '<option value="0">Furnished</option>' +
+                            '<option value="1">Unfurnished</option>' +
+                        '</select>' +
+                        '<label>Type</label>' +
+                        '<select class="pp-type">' +
+                            '<option value="1">Apartment</option>' +
+                            '<option value="5">Villa</option>' +
+                            '<option value="4">Townhouse</option>' +
+                            '<option value="3">Penthouse</option>' +
+                            '<option value="2">Hotel Apartment</option>' +
+                            '<option value="0">Other</option>' +
+                        '</select>' +
+                        '<button class="pp-btn" type="button">Predict rent</button>' +
+                        '<div class="pp-result"></div>' +
+                    '</div>'
+                );
             }
 
-            function convertCoordinates(lat, lng) {
-                var lat_dms = decimalToDMS(lat);
-                var lng_dms = decimalToDMS(lng);
-                var lat_dir = lat >= 0 ? "N" : "S";
-                var lng_dir = lng >= 0 ? "E" : "W";
-                
-                var lat_str = lat_dms.deg + "° " + lat_dms.min + "' " + lat_dms.sec + '" ' + lat_dir;
-                var lng_str = lng_dms.deg + "° " + lng_dms.min + "' " + lng_dms.sec + '" ' + lng_dir;
-                
-                return { lat: lat_str, lng: lng_str };
-            }
-
-            {{this._parent.get_name()}}.on('click', function(e) {
+            map.on('click', function(e) {
+                if (activeMarker) { map.removeLayer(activeMarker); }
                 var lat = e.latlng.lat;
                 var lng = e.latlng.lng;
-                var dms = convertCoordinates(lat, lng);
-                
-                var content = `
-                    <div style="font-family: sans-serif; min-width: 200px;">
-                        <b>Decimal:</b> ${lat.toFixed(6)}, ${lng.toFixed(6)}<br>
-                        <b>DMS Lat:</b> ${dms.lat}<br>
-                        <b>DMS Lon:</b> ${dms.lng}
-                    </div>
-                `;
-                
-                L.popup()
+
+                activeMarker = L.marker(e.latlng).addTo(map);
+                L.popup({ minWidth: 240, closeOnClick: false })
                     .setLatLng(e.latlng)
-                    .setContent(content)
-                    .openOn({{this._parent.get_name()}});
+                    .setContent(popupHtml(lat, lng))
+                    .openOn(map);
             });
-            {% endmacro %}
-        """
-    )
+
+            // Event delegation: one listener on the document catches clicks
+            // on .pp-btn regardless of when/how the popup DOM was inserted
+            // (popup 'add' events aren't reliably fired for popups opened
+            // via L.popup().openOn(map) rather than layer.bindPopup()).
+            document.addEventListener('click', function(e) {
+                var btn = e.target.closest ? e.target.closest('.pp-btn') : null;
+                if (!btn) return;
+
+                var root = btn.closest('.predict-popup');
+                if (!root) return;
+
+                var lat = parseFloat(root.getAttribute('data-lat'));
+                var lng = parseFloat(root.getAttribute('data-lng'));
+                var beds = root.querySelector('.pp-beds').value;
+                var furnishing = root.querySelector('.pp-furnishing').value;
+                var type = root.querySelector('.pp-type').value;
+                var result = root.querySelector('.pp-result');
+
+                if (beds === '' || type === '') {
+                    result.innerHTML = '<span class="pp-error">Fill in Beds and Type first.</span>';
+                    return;
+                }
+
+                result.textContent = 'Predicting…';
+                btn.disabled = true;
+
+                fetch('/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        latitude: lat,
+                        longitude: lng,
+                        beds: beds,
+                        furnishing: furnishing,
+                        type: type
+                    })
+                })
+                .then(function(r) { return r.json().then(function(data) { return { ok: r.ok, data: data }; }); })
+                .then(function(res) {
+                    btn.disabled = false;
+                    if (!res.ok) {
+                        result.innerHTML = '<span class="pp-error">' + (res.data.error || 'Prediction failed') + '</span>';
+                        return;
+                    }
+                    var d = res.data;
+                    result.innerHTML =
+                        '<b>' + d.rent_per_sqft.toFixed(2) + ' AED/sqft</b><br>' +
+                        'Est. annual rent (' + d.assumed_size_sqft + ' sqft): ' +
+                        Math.round(d.estimated_annual_rent).toLocaleString() + ' AED';
+                })
+                .catch(function() {
+                    btn.disabled = false;
+                    result.innerHTML = '<span class="pp-error">Request failed</span>';
+                });
+            });
+        })();
+        {% endmacro %}
+
+        {% macro header(this, kwargs) %}
+        <style>
+            .leaflet-popup-content-wrapper { background: #1f1f1f; color: #eee; }
+            .leaflet-popup-tip { background: #1f1f1f; }
+            .predict-popup { font-family: -apple-system, "Segoe UI", sans-serif; min-width: 210px; }
+            .predict-popup .pp-coords { font-size: 11px; color: #aaa; margin-bottom: 6px; }
+            .predict-popup label { display: block; font-size: 12px; margin-top: 6px; color: #ccc; }
+            .predict-popup .pp-hint { font-size: 10px; color: #888; }
+            .predict-popup input, .predict-popup select {
+                width: 100%; box-sizing: border-box; padding: 4px 6px; margin-top: 2px;
+                background: #2b2b2b; color: #eee; border: 1px solid #444; border-radius: 3px;
+            }
+            .predict-popup .pp-btn {
+                margin-top: 10px; width: 100%; padding: 6px; background: #bd0026; color: #fff;
+                border: none; border-radius: 4px; cursor: pointer; font-weight: 600;
+            }
+            .predict-popup .pp-btn:disabled { opacity: 0.6; cursor: default; }
+            .predict-popup .pp-result { margin-top: 8px; font-size: 13px; line-height: 1.4; }
+            .predict-popup .pp-error { color: #ff6b6b; }
+        </style>
+        {% endmacro %}
+        """)
 
     def __init__(self):
-        super(ClickHandler, self).__init__()
+        super().__init__()
 
 
-dubai_map.add_child(ClickHandler())
+def build_map(df, dubai_geojson, dubai_wide_geojson):
+    dubai_map = folium.Map(
+        location=[25.011921, 55.349367],
+        zoom_start=10,
+        tiles="CartoDB dark_matter",
+        control_scale=True,
+    )
 
-# 11. Save map
-dubai_map.save("dubai_interactive_map.html")
-print("Map has been generated as 'dubai_interactive_map.html'")
+    rent_values = [
+        feature["properties"]["Avg_Rent_per_sqft"]
+        for feature in dubai_geojson["features"]
+        if feature["properties"].get("Avg_Rent_per_sqft") is not None
+    ]
+
+    colormap = None
+    if rent_values:
+        min_rent, max_rent = min(rent_values), max(rent_values)
+        colormap = LinearColormap(
+            colors=["#ffffb2", "#fecc5c", "#fd8d3c", "#f03b20", "#bd0026"],
+            vmin=min_rent,
+            vmax=max_rent,
+            caption="Avg Rent per sqft (AED)",
+        )
+        colormap.add_to(dubai_map)
+        dubai_map.add_child(LegendStyle())
+
+    for feature in dubai_geojson["features"]:
+        rent = feature["properties"].get("Avg_Rent_per_sqft")
+        feature["properties"]["Avg_Rent_Tooltip"] = (
+            f"{int(round(rent))} AED" if rent is not None else "No Data"
+        )
+
+    def community_style(feature):
+        rent = feature["properties"].get("Avg_Rent_per_sqft")
+        if rent is not None and colormap:
+            return {
+                "fillColor": colormap(rent),
+                "color": "#444444",
+                "weight": 0.8,
+                "fillOpacity": 0.6,
+            }
+        return {
+            "fillColor": "transparent",
+            "color": "#444444",
+            "weight": 0.8,
+            "fillOpacity": 0,
+        }
+
+    community_layer = folium.GeoJson(
+        dubai_geojson,
+        name="Dubai Communities",
+        style_function=community_style,
+        tooltip=folium.GeoJsonTooltip(
+            fields=["CNAME_E", "Properties_Count", "Avg_Rent_Tooltip"],
+            aliases=["Community:", "Number of Properties:", "Avg Rent per sqft:"],
+        ),
+    ).add_to(dubai_map)
+
+    dubai_wide_layer = folium.GeoJson(
+        dubai_wide_geojson,
+        name="Dubai Boundary",
+        style_function=lambda x: {
+            "fillColor": "transparent",
+            "color": "#666666",
+            "weight": 2.5,
+            "fillOpacity": 0,
+            "interactive": False,
+        },
+    ).add_to(dubai_map)
+
+    dubai_map.add_child(DynamicStyling(community_layer, dubai_wide_layer))
+    dubai_map.add_child(PredictHandler())
+
+    return dubai_map
