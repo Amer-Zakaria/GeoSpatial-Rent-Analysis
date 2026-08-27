@@ -219,7 +219,7 @@ class PredictHandler(MacroElement):
         super().__init__()
 
 
-def build_map(df, dubai_geojson, dubai_wide_geojson):
+def build_map(dubai_geojson, dubai_wide_geojson):
     dubai_map = folium.Map(
         location=[25.011921, 55.349367],
         zoom_start=10,
