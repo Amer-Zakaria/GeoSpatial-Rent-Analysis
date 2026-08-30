@@ -1,6 +1,8 @@
 import json
+import os
 import pandas as pd
 import folium
+from folium.plugins import MarkerCluster
 from branca.element import MacroElement
 from branca.colormap import LinearColormap
 from jinja2 import Template
@@ -46,6 +48,43 @@ class LegendStyle(MacroElement):
             """)
 
 
+class MarkerTheme(MacroElement):
+    """Dark-theme styling for the restored property marker cluster/popups,
+    so they match the rest of the map's look."""
+
+    def __init__(self):
+        super().__init__()
+        self._template = Template("""
+            {% macro header(this, kwargs) %}
+            <style>
+                .marker-cluster-custom {
+                    background: transparent;
+                }
+                .marker-cluster-custom .cluster-marker {
+                    background: rgba(189, 0, 38, 0.85);
+                    border: 2px solid #eee;
+                    border-radius: 50%;
+                    width: 36px;
+                    height: 36px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: #fff;
+                    font-family: -apple-system, "Segoe UI", sans-serif;
+                    font-weight: 700;
+                    font-size: 13px;
+                }
+                .property-popup {
+                    font-family: -apple-system, "Segoe UI", sans-serif;
+                    font-size: 12px;
+                    line-height: 1.5;
+                    color: #eee;
+                }
+            </style>
+            {% endmacro %}
+            """)
+
+
 class DynamicStyling(MacroElement):
     def __init__(self, community_layer, city_layer):
         super().__init__()
@@ -79,6 +118,197 @@ class DynamicStyling(MacroElement):
                 var style = document.createElement('style');
                 style.innerHTML = '.leaflet-interactive { outline: none !important; }';
                 document.getElementsByTagName('head')[0].appendChild(style);
+            {% endmacro %}
+            """)
+
+
+class PredictCaption(MacroElement):
+    """Bottom-center hint. Transparent (no background box) — legible via a
+    text-shadow against the dark tiles instead — and a bit larger than the
+    old inline caption."""
+
+    def __init__(self):
+        super().__init__()
+        self._template = Template("""
+            {% macro header(this, kwargs) %}
+            <style>
+                .predict-caption {
+                    position: absolute;
+                    bottom: 22px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    z-index: 900;
+                    color: #f2f2f2;
+                    font-family: -apple-system, "Segoe UI", sans-serif;
+                    font-size: 14px;
+                    font-style: italic;
+                    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 10px rgba(0, 0, 0, 0.5);
+                    pointer-events: none;
+                    text-align: center;
+                    white-space: nowrap;
+                }
+            </style>
+            {% endmacro %}
+
+            {% macro script(this, kwargs) %}
+                (function() {
+                    var map = {{this._parent.get_name()}};
+                    var caption = document.createElement('div');
+                    caption.className = 'predict-caption';
+                    caption.textContent = 'Click any coordinate on the map to predict the rental price';
+                    map._container.appendChild(caption);
+                })();
+            {% endmacro %}
+            """)
+
+
+class ToggleControls(MacroElement):
+    """Two small buttons (top-right) to independently show/hide the
+    property marker cluster and the choropleth (community rent-color) layer."""
+
+    def __init__(self, community_layer=None, marker_cluster=None):
+        super().__init__()
+        self.community_layer = community_layer
+        self.marker_cluster = marker_cluster
+        self._template = Template("""
+            {% macro header(this, kwargs) %}
+            <style>
+                .map-toggle-bar {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: flex-end;
+                    gap: 6px;
+                }
+                .map-toggle-buttons {
+                    display: flex;
+                    gap: 8px;
+                }
+                .map-toggle-btn {
+                    background: rgba(31, 31, 31, 0.9);
+                    color: #eee;
+                    border: 1px solid #444;
+                    border-radius: 4px;
+                    padding: 6px 12px;
+                    font-family: -apple-system, "Segoe UI", sans-serif;
+                    font-size: 12px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: background 0.15s ease;
+                }
+                .map-toggle-btn:hover { background: rgba(50, 50, 50, 0.95); }
+                .map-toggle-btn.active { background: #bd0026; border-color: #bd0026; }
+            </style>
+            {% endmacro %}
+
+            {% macro script(this, kwargs) %}
+                (function() {
+                    var map = {{this._parent.get_name()}};
+                    var communityLayer = {{ this.community_layer.get_name() if this.community_layer else 'null' }};
+                    var markerLayer = {{ this.marker_cluster.get_name() if this.marker_cluster else 'null' }};
+
+                    // A real Leaflet control (not a raw absolutely-positioned div):
+                    // it stacks cleanly with the legend control in the same corner
+                    // instead of overlapping it, and Leaflet gives us a container
+                    // we can stop click-through on.
+                    var ToggleControl = L.Control.extend({
+                        options: { position: 'topright' },
+                        onAdd: function() {
+                            var bar = L.DomUtil.create('div', 'map-toggle-bar');
+
+                            // Without this, clicks on the buttons fall through to
+                            // the map's own click handler and open the predict popup.
+                            L.DomEvent.disableClickPropagation(bar);
+                            L.DomEvent.disableScrollPropagation(bar);
+
+                            var buttonsRow = L.DomUtil.create('div', 'map-toggle-buttons', bar);
+
+                            if (communityLayer) {
+                                // Capture each sub-layer's original (colored) style once,
+                                // so "Full" can be restored exactly after "Outline" flattens it.
+                                communityLayer.eachLayer(function(layer) {
+                                    layer._fullStyle = {
+                                        fillColor: layer.options.fillColor,
+                                        color: layer.options.color,
+                                        weight: layer.options.weight,
+                                        fillOpacity: layer.options.fillOpacity
+                                    };
+                                });
+
+                                // 0 = Full (colors + legend), 1 = Outline (boundaries only,
+                                // no fill/legend), 2 = Off (layer hidden entirely).
+                                // Cycle order starting from the default (Off) is:
+                                // Off -> Outline -> Full -> Off ...
+                                var COLOR_STATES = ['Full', 'Outline', 'Off'];
+                                var COLOR_NEXT = { 2: 1, 1: 0, 0: 2 };
+                                var colorState = 2;
+                                var colorBtn = L.DomUtil.create('button', 'map-toggle-btn', buttonsRow);
+                                colorBtn.type = 'button';
+
+                                function applyColorState(state) {
+                                    colorState = state;
+                                    colorBtn.textContent = 'Rent Colors: ' + COLOR_STATES[state];
+                                    colorBtn.classList.toggle('active', state !== 2);
+
+                                    var legendEl = document.querySelector('.leaflet-control.legend');
+
+                                    if (state === 2) {
+                                        map.removeLayer(communityLayer);
+                                        if (legendEl) legendEl.style.display = 'none';
+                                        return;
+                                    }
+
+                                    if (!map.hasLayer(communityLayer)) {
+                                        map.addLayer(communityLayer);
+                                    }
+
+                                    if (state === 0) {
+                                        communityLayer.eachLayer(function(layer) {
+                                            layer.setStyle(layer._fullStyle);
+                                        });
+                                        if (legendEl) legendEl.style.display = '';
+                                    } else {
+                                        communityLayer.eachLayer(function(layer) {
+                                            layer.setStyle({
+                                                fillColor: 'transparent',
+                                                color: layer._fullStyle.color,
+                                                weight: layer._fullStyle.weight,
+                                                fillOpacity: 0
+                                            });
+                                        });
+                                        if (legendEl) legendEl.style.display = 'none';
+                                    }
+                                }
+
+                                colorBtn.addEventListener('click', function() {
+                                    applyColorState(COLOR_NEXT[colorState]);
+                                });
+
+                                applyColorState(2);
+                            }
+
+                            if (markerLayer) {
+                                var markersOn = false;
+                                map.removeLayer(markerLayer);
+                                var markerBtn = L.DomUtil.create('button', 'map-toggle-btn', buttonsRow);
+                                markerBtn.type = 'button';
+                                markerBtn.textContent = 'Properties';
+                                markerBtn.addEventListener('click', function() {
+                                    markersOn = !markersOn;
+                                    if (markersOn) {
+                                        map.addLayer(markerLayer);
+                                    } else {
+                                        map.removeLayer(markerLayer);
+                                    }
+                                    markerBtn.classList.toggle('active', markersOn);
+                                });
+                            }
+
+                            return bar;
+                        }
+                    });
+
+                    map.addControl(new ToggleControl());
+                })();
             {% endmacro %}
             """)
 
@@ -219,11 +449,20 @@ class PredictHandler(MacroElement):
         super().__init__()
 
 
-def build_map(dubai_geojson, dubai_wide_geojson):
+def build_map(dubai_geojson, dubai_wide_geojson, df=None):
+    carto_api_key = os.environ.get(
+        "CARTO_API_KEY", "cb1_2bhz_1_568999064f58e34559d29936"
+    )
+
+    tiles_url = f"https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png?key={carto_api_key}"
+
+    attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+
     dubai_map = folium.Map(
         location=[25.011921, 55.349367],
         zoom_start=10,
-        tiles="CartoDB dark_matter",
+        tiles=tiles_url,
+        attr=attribution,
         control_scale=True,
     )
 
@@ -289,7 +528,47 @@ def build_map(dubai_geojson, dubai_wide_geojson):
         },
     ).add_to(dubai_map)
 
+    # Restored property marker cluster (dark-themed to match the rest of
+    # the map). Non-fatal if no property data was loaded.
+    marker_cluster = None
+    if df is not None and not df.empty:
+        marker_cluster = MarkerCluster(
+            name="Properties",
+            icon_create_function="""
+            function(cluster) {
+                return L.divIcon({
+                    html: '<div class="cluster-marker">' + cluster.getChildCount() + '</div>',
+                    className: 'marker-cluster-custom',
+                    iconSize: L.point(36, 36)
+                });
+            }
+            """,
+        ).add_to(dubai_map)
+
+        for _, row in df.iterrows():
+            popup_text = f"""
+            <div class="property-popup">
+                <b>{row.get('Address', 'N/A')}</b><br>
+                {row.get('Rent', 'N/A')} AED &middot; {row.get('Beds', 'N/A')} Beds<br>
+                {row.get('Location', '')}
+            </div>
+            """
+            folium.CircleMarker(
+                location=[row["Latitude"], row["Longitude"]],
+                radius=5,
+                color="#eeeeee",
+                weight=1,
+                fill=True,
+                fill_color="#bd0026",
+                fill_opacity=0.9,
+                popup=folium.Popup(popup_text, max_width=260),
+            ).add_to(marker_cluster)
+
+        dubai_map.add_child(MarkerTheme())
+
     dubai_map.add_child(DynamicStyling(community_layer, dubai_wide_layer))
     dubai_map.add_child(PredictHandler())
+    dubai_map.add_child(ToggleControls(community_layer, marker_cluster))
+    dubai_map.add_child(PredictCaption())
 
     return dubai_map

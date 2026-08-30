@@ -22,7 +22,7 @@ def get_map_html():
             ),
             boundary_geojson_path=os.path.join(DATA_DIR, "dubai-boundary.geojson"),
         )
-        dubai_map = build_map(communities_geojson, boundary_geojson)
+        dubai_map = build_map(communities_geojson, boundary_geojson, df)
         _map_html_cache = dubai_map.get_root().render()
     return _map_html_cache
 
