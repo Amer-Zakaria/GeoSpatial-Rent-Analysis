@@ -22,7 +22,7 @@ joined = gpd.sjoin(rentals_gdf, communities, how="inner", predicate="within")
 # Warn about unmatched points
 unmatched = len(rentals_gdf) - len(joined)
 if unmatched > 0:
-    print(f"⚠️  {unmatched} point(s) didn't fall within any community and were dropped.")
+    print(f"{unmatched} point(s) didn't fall within any community and were dropped.")
 
 # ── 4. Aggregate per community index ──────────────────────────────────────────
 agg = (
@@ -41,4 +41,4 @@ result = result.drop(columns=["index_right"])
 
 # ── 6. Export ──────────────────────────────────────────────────────────────────
 result.to_file("communities_with_rent.geojson", driver="GeoJSON")
-print("✅ Done — communities_with_rent.geojson written.")
+print("Done — communities_with_rent.geojson written.")

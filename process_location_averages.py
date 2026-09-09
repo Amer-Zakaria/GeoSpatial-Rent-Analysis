@@ -6,7 +6,7 @@ def process_location_averages(input_file):
     df = pd.read_csv(input_file)
 
     # Group by Location and keep coordinates (Same Location has the same Long/Lat)
-    # Then aggregate importatn columns
+    # Then aggregate important columns
     result = (
         df.groupby(["Location", "Latitude", "Longitude"])
         .agg(

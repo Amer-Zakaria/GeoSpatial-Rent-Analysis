@@ -1,0 +1,12 @@
+Location_score
+Distance_to_center
+Beds
+Furnishing
+Type
+Geo_cluster
+Latitude
+Longitude
+LocationScore_Beds
+Distance_Beds
+LocationScore_Furnishing
+Distance_Type
